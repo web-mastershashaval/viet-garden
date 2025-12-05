@@ -2,29 +2,40 @@
 import mysql from "mysql2/promise";
 import type { Pool } from "mysql2/promise";
 
-// Use globalThis to prevent creating multiple pools on hot reload
+// Prevent creating multiple pools (Vercel hot reload fix)
 declare global {
-  // allow a module-level global to hold the pool across hot reloads
   // eslint-disable-next-line no-var
   var mysqlPool: Pool | undefined;
 }
 
 let pool: Pool;
 
+// ----------------------
+// DATABASE CONFIG
+// ----------------------
 const dbConfig = {
   host: process.env.DB_HOST || "old19i.h.filess.io",
   port: parseInt(process.env.DB_PORT || "3307"),
   user: process.env.DB_USER || "viet_garden_meetsaypay",
   password: process.env.DB_PASS || "3825cfa21841b58fcd27fd6ffda4db6660473676",
   database: process.env.DB_NAME || "viet_garden_meetsaypay",
+
   waitForConnections: true,
-  connectionLimit: 3,
+  connectionLimit: 5,
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
   connectTimeout: 10000,
+
+  // 🔥 REQUIRED FOR FILES.IO + VERCEL
+  ssl: {
+    rejectUnauthorized: false,
+  },
 };
 
+// ----------------------
+// CREATE POOL IF NOT EXIST
+// ----------------------
 if (!globalThis.mysqlPool) {
   console.log("🔄 Creating new MySQL connection pool...");
   console.log("📊 Database Config:", {
@@ -35,10 +46,11 @@ if (!globalThis.mysqlPool) {
     passwordSet: !!dbConfig.password,
   });
 
-  globalThis.mysqlPool = mysql.createPool(dbConfig);
+  pool = mysql.createPool(dbConfig);
+  globalThis.mysqlPool = pool;
 
-  // Handle pool errors
-  globalThis.mysqlPool.on("connection", (connection) => {
+  // Log new DB connections
+  pool.on("connection", (connection) => {
     console.log("🔗 New database connection established");
 
     connection.on("error", (err) => {
@@ -46,13 +58,13 @@ if (!globalThis.mysqlPool) {
     });
   });
 
-  // Test the connection
-  globalThis.mysqlPool
+  // Test connection
+  pool
     .getConnection()
-    .then((connection) => {
+    .then((conn) => {
       console.log("✅ Database connection successful!");
-      connection.release();
-      return globalThis.mysqlPool!.query("SELECT 1 as test");
+      conn.release();
+      return pool.query("SELECT 1");
     })
     .then(() => {
       console.log("✅ Database query test successful!");
@@ -66,36 +78,42 @@ if (!globalThis.mysqlPool) {
       });
     });
 } else {
-  console.log("♻️ Reusing existing MySQL connection pool");
+  console.log("♻️ Reusing existing MySQL connection pool...");
+  pool = globalThis.mysqlPool;
 }
 
-pool = globalThis.mysqlPool!;
-
-// Helper function to execute queries with retry on connection errors
-export async function queryWithRetry(sql: string, params?: any[], maxRetries = 2) {
+// ----------------------
+// QUERY HELPER WITH RETRY
+// ----------------------
+export async function queryWithRetry(
+  sql: string,
+  params?: any[],
+  maxRetries = 2
+) {
   let lastError;
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  for (let i = 1; i <= maxRetries; i++) {
     try {
-      console.log(`🔍 Query attempt ${attempt}/${maxRetries}`);
+      console.log(`🔍 Query attempt ${i}/${maxRetries}`);
       const result = await pool.query(sql, params);
-      console.log(`✅ Query successful on attempt ${attempt}`);
+      console.log(`✅ Query successful on attempt ${i}`);
       return result;
     } catch (error: any) {
       lastError = error;
-      console.error(`❌ Query failed on attempt ${attempt}:`, error.code);
+      console.error(`❌ Query failed (attempt ${i}):`, error.code);
 
-      // Retry on connection errors
-      if (error.code === "ECONNRESET" || error.code === "ETIMEDOUT" || error.code === "PROTOCOL_CONNECTION_LOST") {
-        if (attempt < maxRetries) {
-          console.log(`🔄 Retrying query... (${attempt}/${maxRetries})`);
-          // Wait a bit before retrying
-          await new Promise(resolve => setTimeout(resolve, 1000));
+      if (
+        error.code === "ECONNRESET" ||
+        error.code === "ETIMEDOUT" ||
+        error.code === "PROTOCOL_CONNECTION_LOST"
+      ) {
+        if (i < maxRetries) {
+          console.log("🔄 Retrying query...");
+          await new Promise((res) => setTimeout(res, 800));
           continue;
         }
       }
 
-      // Don't retry other errors
       throw error;
     }
   }
