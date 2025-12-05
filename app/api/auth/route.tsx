@@ -1,34 +1,33 @@
+// app/api/auth/login/route.ts
 import { NextResponse } from "next/server";
-import { queryWithRetry } from "../db";
-import bcrypt from "bcryptjs"; // Use bcryptjs for easier compatibility
+import { queryWithRetry } from "../../db";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-// POST /api/auth
 export async function POST(req: Request) {
-  console.log("🔐 Auth request received");
+  console.log("🔐 Login request received");
 
   try {
     const { username, password } = await req.json();
-    console.log("📝 Login attempt for username:", username);
 
     if (!username || !password) {
-      console.log("❌ Missing credentials");
+      console.log("❌ Missing username or password");
       return NextResponse.json(
         { message: "Username and password are required" },
         { status: 400 }
       );
     }
 
-    // Check if admin exists by username
-    console.log("🔍 Querying database for user:", username);
+    console.log("🧍 Checking user:", username);
+
+    // Fetch user
     const [rows]: any = await queryWithRetry(
-      "SELECT * FROM admins WHERE username = ?",
+      "SELECT id, name, username, email, role, password FROM admins WHERE username = ? LIMIT 1",
       [username]
     );
-    console.log("📊 Query result: Found", rows.length, "user(s)");
 
-    if (rows.length === 0) {
-      console.log("❌ User not found in database");
+    if (!rows || rows.length === 0) {
+      console.log("❌ User not found");
       return NextResponse.json(
         { message: "Invalid username or password" },
         { status: 401 }
@@ -36,40 +35,46 @@ export async function POST(req: Request) {
     }
 
     const admin = rows[0];
-    console.log("👤 User found:", { id: admin.id, username: admin.username, role: admin.role });
+    console.log("👤 User found:", admin.username);
 
     // Compare passwords
-    console.log("🔑 Comparing passwords...");
-    const validPassword = await bcrypt.compare(password, admin.password);
-    console.log("🔑 Password valid:", validPassword);
-
-    if (!validPassword) {
-      console.log("❌ Invalid password");
+    const isValidPassword = await bcrypt.compare(password, admin.password);
+    if (!isValidPassword) {
+      console.log("❌ Incorrect password");
       return NextResponse.json(
         { message: "Invalid username or password" },
         { status: 401 }
       );
     }
 
-    // Sign JWT
-    console.log("🎫 Generating JWT token...");
-    const jwtSecret = process.env.JWT_SECRET;
-    if (!jwtSecret) {
-      console.error("❌ JWT_SECRET is not set!");
-      return NextResponse.json({ message: "Server configuration error" }, { status: 500 });
+    console.log("🔑 Password match, generating JWT…");
+
+    // Validate JWT secret
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      console.error("❌ JWT_SECRET missing in env variables!");
+      return NextResponse.json(
+        { message: "Server configuration error" },
+        { status: 500 }
+      );
     }
 
+    // Generate JWT
     const token = jwt.sign(
-      { id: admin.id, username: admin.username, email: admin.email, role: admin.role },
-      jwtSecret,
+      {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        role: admin.role,
+      },
+      secret,
       { expiresIn: "1h" }
     );
-    console.log("✅ JWT token generated successfully");
 
-    // Return admin info + token
-    console.log("✅ Login successful for user:", username);
+    console.log("🎫 Token generated successfully");
 
-    const response = NextResponse.json({
+    // Prepare response
+    const res = NextResponse.json({
       message: "Login successful",
       token,
       admin: {
@@ -81,23 +86,29 @@ export async function POST(req: Request) {
       },
     });
 
-    // Set the token as a cookie for middleware to read
-    response.cookies.set("adminToken", token, {
-      httpOnly: false, // Allow client-side access
+    // Set cookie
+    res.cookies.set("adminToken", token, {
+      httpOnly: true, // secure auth
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 3600, // 1 hour (matches JWT expiry)
+      maxAge: 3600,
       path: "/",
     });
 
-    console.log("🍪 Cookie set: adminToken");
-    return response;
-  } catch (error) {
-    console.error("❌ Login error:", {
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-      error,
+    console.log("🍪 Cookie set successfully");
+    console.log("✅ Login complete");
+
+    return res;
+  } catch (error: any) {
+    console.error("❌ Login API error:", {
+      message: error.message,
+      code: error.code,
+      stack: error.stack,
     });
-    return NextResponse.json({ message: "Server error" }, { status: 500 });
+
+    return NextResponse.json(
+      { message: "Server error occurred" },
+      { status: 500 }
+    );
   }
 }
