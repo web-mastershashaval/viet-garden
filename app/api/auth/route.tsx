@@ -1,6 +1,6 @@
 // app/api/auth/login/route.ts
 import { NextResponse } from "next/server";
-import { queryWithRetry } from "../../db";
+import { queryWithRetry } from "app/api/db";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
